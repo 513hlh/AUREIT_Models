@@ -1,0 +1,296 @@
+---
+title: "Regression Analysis"
+author: "Hailey Hartman"
+format: docx
+editor: visual
+---
+
+# IMPORTANT INFO
+
+This document is built with placeholders for your companies ticker, **you are responsible for finding each instance and replacing**. If your code is giving you an error indicating that "xxxx object is not found" and the object is referencing a ticker that is not yours you have missed a place you need to replace.
+
+From here out you will be able to create professional graphs and analysis.
+
+# Loading Data and Libraries
+
+```{r,results="hide",warning=FALSE, message=FALSE}
+
+library(quantmod)
+library(tidyquant)
+library(dplyr)
+library(tidyr)
+library(sandwich)
+library(lmtest)
+
+```
+
+# Company vs One Indicator
+
+#### Loading Company Name
+
+Times to replace with ticker: 5
+
+Times to replace with indicator: 0
+
+```{r}
+
+# 1. Get stock prices and compute returns
+HIW_prices <- tq_get("HIW", get = "stock.prices", from = "2025-01-01")
+HIW_returns <- HIW_prices |>
+  tq_transmute(select     = adjusted,
+               mutate_fun = periodReturn,
+               period     = "daily",
+               type       = "log",
+               col_rename = "HIW")
+
+
+```
+
+#### Loading and Cleaning Indicator
+
+Times to replace with ticker: 0
+
+Times to replace with indicator: 3
+
+```{r}
+# 2. Get Indicator 
+Indicator_data <- tq_get("CPIAUCSL", get = "economic.data", from = "2025-01-01")
+
+# 3. Forward-fill GDP to daily frequency
+Indicator_daily <- Indicator_data |>
+  dplyr::rename(CPIAUCSL = price) |>   
+  tidyr::complete(date = seq.Date(min(date), max(date), by = "day")) |>
+  tidyr::fill(CPIAUCSL)
+```
+
+#### Creating Merged Data set
+
+Times to replace with ticker: 1
+
+Times to replace with indicator: 0
+
+```{r}
+# 4. Merge stock returns with GDP
+merge <- HIW_returns |>
+  left_join(Indicator_daily, by = "date")
+head(merge)
+```
+
+#### Creating Regression Output
+
+Times to replace with ticker: 1
+
+Times to replace with indicator: 1
+
+```{r}
+# 5.  Estimate the model.
+model<- lm(HIW ~ CPIAUCSL, data = merge) 
+
+#6.  Apply Newey-West standard Error to get final model
+nw_se <- NeweyWest(model, lag= 5, prewhite= F)
+coeftest(model, vcov. = nw_se)
+```
+
+## Follow Up Analysis for One Indicator Model
+
+#### Plotting Residuals
+
+Times to replace with ticker: 0
+
+Times to replace with indicator: 0
+
+```{r}
+library(ggplot2)
+library(broom)
+library(scales)
+library(tseries)
+# 1. Create Simple regression (CCI ~ FEDFUNDS)
+
+simple_nw5 <- NeweyWest(model, lag = 5)
+
+# 1. Merge and clean data
+
+aug_simple <- augment(model, newdata = merge)
+stopifnot(nrow(merge) == nrow(aug_simple))    
+
+merge <- merge %>%
+  mutate(
+    resid_simple  = aug_simple$.resid,
+    fitted_simple = aug_simple$.fitted)
+
+# 2. Plot: residuals over time 
+p_resid_time <- ggplot(merge, aes(x = date, y = resid_simple)) +
+  geom_line(color = "steelblue", na.rm = TRUE) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Residuals over time ", x = "Date", y = "Residual")
+
+print(p_resid_time)
+```
+
+# Company vs Fama-French Factors (Cahart 4-Factor Model)
+
+#### Getting Fama-French daily Factor Data
+
+**REMINDER:** This data has to be downloaded to your computer and stored in the same folder that R is running out of. If you are having issues loading CSV search "R programming csv reading issues" in your preferred search engine – I do **not** recommend using OpenAI.
+
+Times to replace with ticker: 0
+
+Times to replace with indicator: 0
+
+```{r}
+# 1.  Load Fama-French data
+
+library(tidyverse)
+ff3 <- read_csv("F-F_Research_Data_Factors_daily.csv")
+ff_mom <- read_csv("Developed_MOM_Factor_Daily.csv")
+
+# 2.  Clean Data 
+
+ff3 <- ff3 %>%
+  mutate(date = as.Date(as.character(date), format = "%Y%m%d"))
+ff3 <- ff3 %>%
+  mutate(across(-date, ~ .x / 100))
+
+ff_mom <- ff_mom %>%
+  mutate(date = as.Date(as.character(date), format = "%Y%m%d"))
+ff_mom <- ff_mom %>%
+  mutate(across(-date, ~ .x / 100))
+
+```
+
+#### Creating Merged Data set
+
+Times to replace with ticker: 1
+
+Times to replace with indicator: 0
+
+```{r}
+# 3.  Merging Fama-French Data with the stock of your choice
+merged_ff3_data <- HIW_returns %>%
+  left_join(ff3, by = "date") %>%
+  left_join(ff_mom, by = "date")
+```
+
+#### Creating Regression Output
+
+Times to replace with ticker: 1
+
+Times to replace with indicator: 0
+
+```{r}
+# 4. Estimate the Cahart model
+carhart_model <- lm((HIW - RF) ~ `Mkt-RF` + SMB + HML + WML, data = merged_ff3_data)
+
+
+# 5.  function to get coeftest with Newey-West at chosen lag and robust CIs
+nw_report <- function(lm_obj, lag = 5, conf_level = 0.95) {
+  vcov_nw <- NeweyWest(lm_obj, lag = lag, prewhite = FALSE)
+  ct <- coeftest(lm_obj, vcov. = vcov_nw)          # table with est, se, t, p
+  ests <- coef(lm_obj)
+  ses <- sqrt(diag(vcov_nw))
+  alpha <- (1 - conf_level) / 2
+  z <- qnorm(1 - alpha)
+  cis <- cbind(ests - z * ses, ests + z * ses)
+  res <- broom::tidy(lm_obj) %>%
+    mutate(nw_se = ses, nw_lwr = cis[,1], nw_upr = cis[,2]) %>%
+    select(term, estimate, nw_se, nw_lwr, nw_upr) 
+  list(coeftest = ct, tidy = res, vcov_nw = vcov_nw)}
+
+carhart_nw5 <- nw_report(carhart_model, lag = 5)
+
+# 6. print human-friendly tables
+carhart_nw5$tidy
+coeftest(carhart_model, vcov. = nw_se)
+
+
+
+```
+
+## Follow Up Analysis for Carhart Model
+
+#### Visualizing Confidence Intervals
+
+Times to replace with ticker: 0
+
+Times to replace with indicator: 0
+
+```{r}
+# 1. prepare tidy table for carhart_model with NW(5)
+car_tidy <- carhart_nw5$tidy
+
+# 2. Create Plot
+ggplot(car_tidy %>% filter(term != "(Intercept)"),
+       aes(x = term, y = estimate)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = nw_lwr, ymax = nw_upr), width = 0.2) +
+  coord_flip() +
+  labs(title = "Carhart factor loadings with Newey-West (lag=5) 95% CIs",
+       x = "Factor", y = "Estimate")
+
+```
+
+#### Visualizing Cumulative Abnormal Returns
+
+Times to replace with ticker: 0
+
+Times to replace with indicator: 0
+
+```{r}
+library(broom)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(tidyr)
+
+# 1.Creat augment aligned residuals/fitted
+aug <- augment(carhart_model, newdata = merged_ff3_data)
+
+# 2. Stop check at common error
+stopifnot(nrow(merged_ff3_data) == nrow(aug))
+
+# 3. Clean and merge data
+merged_ff3_data <- merged_ff3_data %>%
+  mutate(
+    resid_carhart  = aug$.resid,
+    fitted_carhart = aug$.fitted)
+
+N <- nrow(merged_ff3_data)
+intercept_alpha <- coef(carhart_model)["(Intercept)"]
+
+merged_ff3_data <- merged_ff3_data %>%
+  arrange(date) %>%
+  mutate(
+    resid_for_cumsum = replace_na(resid_carhart, 0),
+    CAR = cumsum(resid_for_cumsum),
+    CAR_alpha = cumsum(rep(intercept_alpha, N))
+  )
+
+# 4. Create plot
+ggplot(merged_ff3_data, aes(x = date)) +
+  geom_line(aes(y = CAR), color = "firebrick", na.rm = TRUE) +
+  labs(title = "Cumulative Abnormal Returns ", y = "Cumulative return", x = "Date") +
+  scale_y_continuous(labels = percent_format(accuracy = 0.01))
+```
+
+#### Testing Various Lags
+
+Times to replace with ticker: 0
+
+Times to replace with indicator: 0
+
+```{r}
+
+lags <- c(0, 3, 5, 10, 20)
+robust_lag_table <- map_df(lags, function(L) {
+  vc <- NeweyWest(carhart_model, lag = L, prewhite = FALSE)
+  se <- sqrt(diag(vc))
+  est <- coef(carhart_model)
+  tibble(lag = L,
+         term = names(est),
+         estimate = as.numeric(est),
+         nw_se = as.numeric(se),
+         t_stat = estimate / nw_se,
+         p_val = 2 * pnorm(-abs(t_stat)))
+})
+robust_lag_table %>% pivot_wider(names_from = term, values_from = c(estimate, nw_se, t_stat, p_val))
+```
